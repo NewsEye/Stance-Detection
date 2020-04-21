@@ -1,35 +1,204 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# In[95]:
 
 
 from transformers import BertForSequenceClassification, AdamW, BertConfig, BertTokenizer
 import numpy as np
 from keras.preprocessing.sequence import pad_sequences
-import torch, os, csv
+import torch, os, csv, codecs, json
 from sklearn.metrics import precision_recall_fscore_support
+from sklearn.metrics import classification_report
 import pandas as pd
+import collections
 from transformers import BertTokenizer
-from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 import time
 import datetime
 import random
-#**** Global variable ***
+import argparse
+import sys
 
-dataset_name = "German_data_train_input"
-data_folder = "/hainguyen/STANCE_DETECTION/" + dataset_name+"/"
-data_file_path = data_folder+"German_data_train.csv"
+#================= Global variable ================= 
+
+parser = argparse.ArgumentParser()
+parser.add_argument("curr_lang", help="Choose curr_lang", type=str) #German, French, NLF, Swedish, PULS, EMM
+parser.add_argument("cased", help="Choose cased", type=int) 
+#'bert-base-german-dbmdz-cased', 'bert-base-multilingual-cased', 'bert-base-finnish-cased-v1', 'bert-base-multilingual-cased'
+
+args = parser.parse_args()
+curr_lang = args.curr_lang; 
+flag_cased = args.cased
 
 
-#---- Global variable ----
+dataset_name = curr_lang+"_data_train_input"
+data_folder = "" + dataset_name+"/"
+data_file_path = data_folder+curr_lang+"_data_train.csv"
 
-#*** Functions ****
+dataset_name_dev = curr_lang+"_data_dev_input"
+data_folder_dev = "" + dataset_name_dev+"/"
+data_file_path_dev = data_folder_dev+curr_lang+"_data_dev.csv"
+
+max_seq_len_data=256
+if flag_cased==1:
+    model_save = "model_save_cased_" + str(max_seq_len_data) +"/" 
+    if curr_lang=='German': model_name = 'bert-base-german-dbmdz-cased'
+    elif curr_lang=='NLF': model_name = data_folder+'bert-base-finnish-cased-v1'
+    elif curr_lang=='EMM' or curr_lang=='PULS': model_name = 'bert-base-cased'       
+    else: model_name = 'bert-base-multilingual-cased'
+    tokenizer = BertTokenizer.from_pretrained(model_name, do_lower_case=False)              
+else:
+    model_save = "model_save_uncased_" + str(max_seq_len_data) +"/"     
+    if curr_lang=='German': model_name = 'bert-base-german-dbmdz-uncased'
+    elif curr_lang=='NLF': model_name = data_folder+'bert-base-finnish-uncased-v1'
+    elif curr_lang=='EMM' or curr_lang=='PULS': model_name = 'bert-base-uncased'          
+    else: model_name = 'bert-base-multilingual-uncased'    
+    tokenizer = BertTokenizer.from_pretrained(model_name, do_lower_case=True)     
+
+max_seq_len = 512; batch_size = 12; 
+epochs = 10; save_step=1 # Number of training epochs (authors recommend between 2 and 4)
+
+
+# Load BertForSequenceClassification, the pretrained BERT model with a single linear classification layer on top. 
+model = BertForSequenceClassification.from_pretrained(
+    model_name, # Use the 12-layer BERT model, with an uncased vocab.
+    num_labels = 3, # The number of output labels--2 for binary classification.
+                    # You can increase this for multi-class tasks.   
+    output_attentions = False, # Whether the model returns attentions weights.
+    output_hidden_states = False, # Whether the model returns all hidden-states.
+)
+
+
+optimizer = AdamW(model.parameters(),
+                  lr = 5e-5, # args.learning_rate - default is 5e-5, our notebook had 2e-5
+                  eps = 1e-8 # args.adam_epsilon  - default is 1e-8.
+                )
+
+
+#================= Global variable ================= 
+
+# # # If there's a GPU available...
+if torch.cuda.is_available():    
+
+#     # Tell PyTorch to use the GPU.    
+    device = torch.device("cuda")
+
+    print('There are %d GPU(s) available.' % torch.cuda.device_count())
+
+    print('We will use the GPU:', torch.cuda.get_device_name(0))
+
+# # If not...
+else:
+    print('No GPU available, using the CPU instead.')
+    device = torch.device("cpu")
+# device = torch.device("cpu")
+
+# Copy the model to the GPU.
+model.to(device)
+
+#================= Functions ================= 
+def write_dict(dict_tmp, dict_file_path):
+    with codecs.open(dict_file_path, 'wb', encoding='utf-8') as myfile:
+        myfile.write(json.dumps(dict_tmp, indent=4, sort_keys=True))
+        
+
+def choose_length_threshold(list_data):
+    counter_tmp = collections.Counter(list_data).items() 
+    list_threshold = []
+    for i in range(0,max(list_data)+1):
+        sum_val = 0
+        for (key, val) in counter_tmp:
+            if key<=i: sum_val+=val
+         
+        list_threshold.append((i, sum_val/len(list_data)*100.0))
+    print(list_threshold) 
+
+def create_data(data_file_path):
+    df = pd.read_csv(data_file_path, delimiter=',', lineterminator='\n', encoding="utf-8", header=0, names=['Content', 'NamedEntity', 'Polarity'])
+
+    # Report the number of sentences.
+    print('Number of training sentences: {:,}\n'.format(df.shape[0]))
+
+    Tweets = df.Content.values#[:5]
+    Targets = df.NamedEntity.values#[:5]
+    labels = df.Polarity.values#[:5]
+    
+    print(collections.Counter(labels))
+#     exit()
+
+
+    # Tokenize all of the sentences and map the tokens to thier word IDs.
+    input_ids = []
+
+    # For every sentence...
+    for i in range(len(Tweets)):
+        sent = Tweets[i]
+        target_sent = Targets[i]
+#         print(i, labels[i])
+        # `encode` will:
+        #   (1) Tokenize the sentence.
+        #   (2) Prepend the `[CLS]` token to the start.
+        #   (3) Append the `[SEP]` token to the end.
+        #   (4) Map tokens to their IDs.
+
+        encoded_sent = tokenizer.encode(
+                            sent, target_sent,                      # Sentence to encode.
+                            add_special_tokens = True, # Add '[CLS]' and '[SEP]'
+                            truncation_strategy='only_first',
+
+                            # This function also supports truncation and conversion
+                            # to pytorch tensors, but we need to do padding, so we
+                            # can't use these features :( .
+                            max_length = max_seq_len,          # Truncate all sentences.
+                            #return_tensors = 'pt',     # Return pytorch tensors.
+                       )
+#         print(len(encoded_sent))
+#         print('LEN: ', len(encoded_sent), encoded_sent)
+        input_ids.append(encoded_sent)
+#         if i==5: exit()
+    # create token_ids_type
+    token_type_ids = []
+    # Create attention masks
+    attention_masks = []
+
+    for sent in input_ids:
+
+#         print(sent)
+        start_second_sent_index = sent.index(tokenizer.cls_token_id) +1
+        token_type_id = [0 if i<start_second_sent_index else 1 for i in range(len(sent))]
+        token_type_ids.append(token_type_id)
+#         print(len(token_type_id))
+        
+        # Create the attention mask.
+        #   - If a token ID is 0, then it's padding, set the mask to 0.
+        #   - If a token ID is > 0, then it's a real token, set the mask to 1.
+        att_mask = [int(token_id > 0) for token_id in sent]
+
+        # Store the attention mask for this sentence.
+        attention_masks.append(att_mask) 
+
+    input_ids = pad_sequences(input_ids, maxlen=max_seq_len, dtype="long", 
+                          value=0, truncating="post", padding="post")    
+    token_type_ids = pad_sequences(token_type_ids, maxlen=max_seq_len, dtype="long", 
+                          value=0, truncating="post", padding="post")
+    attention_masks = pad_sequences(attention_masks, maxlen=max_seq_len, dtype="long", 
+                          value=0, truncating="post", padding="post")
+
+    print('input_ids[0] AFTER',input_ids[0])  
+    print('token_type_ids AFTER',token_type_ids[0])
+    print('mask_ids[0] AFTER',attention_masks[0]) 
+    
+    return input_ids, labels, attention_masks, token_type_ids
+    # print(attention_masks[0])    
+
 # Function to calculate the accuracy of our predictions vs labels
 def flat_accuracy(preds, labels):
     pred_flat = np.argmax(preds, axis=1).flatten()
     labels_flat = labels.flatten()
     return np.sum(pred_flat == labels_flat) / len(labels_flat)
+
+
 def format_time(elapsed):
     '''
     Takes a time in seconds and returns a string hh:mm:ss
@@ -54,126 +223,44 @@ def write_csv_file_header(file_path, list_data, fieldnames):
         for line in list_data:
             writer.writerow(line)#({'emp_name': 'John Smith', 'dept': 'Accounting', 'birth_month': 'November'})
 
+def get_f1(results_folder, num_batch): 
+    csv_writer = open_csv_file(results_folder + 'f1_avg.csv', ['num_batch', 'f1_avg'])
+    for num_context_word in range(0, num_batch, 1):
+        fname = "val_result_"+str(val_epoch)+".json"
+        file_path = results_folder + fname
+        dict_results = read_dict(file_path)
+        f1_avg = round(dict_results["macro avg"]["f1-score"]*100,2)
+        csv_writer.writerow([num_context_word, f1_avg])
+#================= Functions ================= 
 
-#--- Functions -----
+# from sklearn.model_selection import train_test_split
 
+# # Use 90% for training and 10% for validation.
+# train_inputs, validation_inputs, train_labels, validation_labels = train_test_split(input_ids, labels,test_size=0.1)
+# # Do the same for the masks.
+# train_masks, validation_masks, _, _ = train_test_split(attention_masks, labels,test_size=0.1)
 
-# # # If there's a GPU available...
-if torch.cuda.is_available():    
-
-# # Tell PyTorch to use the GPU.    
-    device = torch.device("cuda")
-
-    print('There are %d GPU(s) available.' % torch.cuda.device_count())
-
-    print('We will use the GPU:', torch.cuda.get_device_name(0))
-
-# # If not...
-else:
-    print('No GPU available, using the CPU instead.')
-    device = torch.device("cpu")
-
-
-# Load the dataset into a pandas dataframe.
-df = pd.read_csv(data_file_path, delimiter=',', lineterminator='\n', encoding="utf-8", header=0, names=['Content', 'NamedEntity', 'Polarity'])
-
-# Report the number of sentences.
-print('Number of training sentences: {:,}\n'.format(df.shape[0]))
-
-Tweets = df.Content.values
-Targets = df.NamedEntity.values
-labels = df.Polarity.values
-
-max_seq_len = 512
-
-print(labels.shape)
+# train_type_inputs, validation_type_inputs, _, _ = train_test_split(token_type_ids, labels,test_size=0.1)
 
 
+input_ids, labels, attention_masks, token_type_ids = create_data(data_file_path); 
+train_inputs = torch.tensor(input_ids)
+train_labels = torch.tensor(labels)
+train_masks = torch.tensor(attention_masks)
+train_type_inputs = torch.tensor(token_type_ids)
+
+input_ids, labels, attention_masks, token_type_ids = create_data(data_file_path_dev)
+validation_inputs = torch.tensor(input_ids)
+validation_labels = torch.tensor(labels)
+validation_masks = torch.tensor(attention_masks)
+validation_type_inputs = torch.tensor(token_type_ids)
+
+# The DataLoader needs to know our batch size for training, so we specify it 
+# here.
+# For fine-tuning BERT on a specific task, the authors recommend a batch size of
+# 16 or 32.
 
 
-# Load the BERT tokenizer.
-print('Loading BERT tokenizer...')
-tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
-
-
-# Tokenize all of the sentences and map the tokens to thier word IDs.
-input_ids = []
-
-# For every sentence...
-for i in range(len(Tweets)):
-    sent = Tweets[i]
-    target_sent = Targets[i]
-#     if len(str(sent))==0: sent = target_sent
-    # `encode` will:
-    #   (1) Tokenize the sentence.
-    #   (2) Prepend the `[CLS]` token to the start.
-    #   (3) Append the `[SEP]` token to the end.
-    #   (4) Map tokens to their IDs.
-    print(i,target_sent) 
-    encoded_sent = tokenizer.encode(
-                        sent, target_sent,                      # Sentence to encode.
-                        add_special_tokens = True, # Add '[CLS]' and '[SEP]'
-                        truncation_strategy='only_first',
-                        max_length = max_seq_len,          # Truncate all sentences.
-                   )
-    input_ids.append(encoded_sent)
-
-# create token_ids_type
-token_type_ids = []
-# Create attention masks
-attention_masks = []
-
-for sent in input_ids:
-    
-    start_second_sent_index = sent.index(102) +1
-    token_type_id = [0 if i<start_second_sent_index else 1 for i in range(len(sent))]
-    token_type_ids.append(token_type_id)
-
-    # Create the attention mask.
-    #   - If a token ID is 0, then it's padding, set the mask to 0.
-    #   - If a token ID is > 0, then it's a real token, set the mask to 1.
-    att_mask = [int(token_id > 0) for token_id in sent]
-    
-    # Store the attention mask for this sentence.
-    attention_masks.append(att_mask) 
-        
-input_ids = pad_sequences(input_ids, maxlen=max_seq_len, dtype="long", 
-                      value=0, truncating="post", padding="post")    
-token_type_ids = pad_sequences(token_type_ids, maxlen=max_seq_len, dtype="long", 
-                      value=0, truncating="post", padding="post")
-attention_masks = pad_sequences(attention_masks, maxlen=max_seq_len, dtype="long", 
-                      value=0, truncating="post", padding="post")
-
-
-print('input_ids[0] AFTER',input_ids[0])  
-print('token_type_ids AFTER',token_type_ids[0])
-print('mask_ids[0] AFTER',attention_masks[0]) 
-# print(attention_masks[0])    
-
-
-
-
-
-train_inputs, validation_inputs, train_labels, validation_labels = train_test_split(input_ids, labels,test_size=0.1)
-
-train_masks, validation_masks, _, _ = train_test_split(attention_masks, labels,test_size=0.1)
-
-train_type_inputs, validation_type_inputs, _, _ = train_test_split(token_type_ids, labels,test_size=0.1)
-
-
-train_inputs = torch.tensor(train_inputs)
-validation_inputs = torch.tensor(validation_inputs)
-
-train_labels = torch.tensor(train_labels)
-validation_labels = torch.tensor(validation_labels)
-
-train_masks = torch.tensor(train_masks)
-validation_masks = torch.tensor(validation_masks)
-
-train_type_inputs = torch.tensor(train_type_inputs)
-validation_type_inputs = torch.tensor(validation_type_inputs)
-
-batch_size = 32
 
 # Create the DataLoader for our training set.
 train_data = TensorDataset(train_inputs, train_masks, train_type_inputs, train_labels)
@@ -185,39 +272,17 @@ validation_data = TensorDataset(validation_inputs, validation_masks, validation_
 validation_sampler = SequentialSampler(validation_data)
 validation_dataloader = DataLoader(validation_data, sampler=validation_sampler, batch_size=batch_size)
 
-
-
-# Load BertForSequenceClassification, the pretrained BERT model with a single 
-# linear classification layer on top. 
-model = BertForSequenceClassification.from_pretrained(
-    "bert-base-uncased", # Use the 12-layer BERT model, with an uncased vocab.
-    num_labels = 3, # The number of output labels--2 for binary classification.
-                    # You can increase this for multi-class tasks.   
-    output_attentions = False, # Whether the model returns attentions weights.
-    output_hidden_states = False, # Whether the model returns all hidden-states.
-)
-
-
-# Copy the model to the GPU.
-model.to(device)
-
-optimizer = AdamW(model.parameters(),
-                  lr = 5e-5, # args.learning_rate - default is 5e-5, our notebook had 2e-5
-                  eps = 1e-8 # args.adam_epsilon  - default is 1e-8.
-                )
-
-epochs = 10; save_step=1
-
+# from transformers import get_linear_schedule_with_warmup
 # Total number of training steps is number of batches * number of epochs.
 total_steps = len(train_dataloader) * epochs
 
-
-
-
+# Create the learning rate scheduler.
+# scheduler = get_linear_schedule_with_warmup(optimizer, 
+#                                             num_warmup_steps = 0, # Default value in run_glue.py
+#                                             num_training_steps = total_steps)
 
 # Set the seed value all over the place to make this reproducible.
 seed_val = 42
-
 random.seed(seed_val)
 np.random.seed(seed_val)
 torch.manual_seed(seed_val)
@@ -227,7 +292,7 @@ torch.cuda.manual_seed_all(seed_val)
 loss_values = []; accuracy_values = []
 
 
-fieldnames=['epoch','train_loss','val_acc']
+fieldnames=['epoch','train_loss','val_acc', 'ifscore']
 list_data = []
 # For each epoch...
 for epoch_i in range(0, epochs):
@@ -303,7 +368,20 @@ for epoch_i in range(0, epochs):
         # calculate the average loss at the end. `loss` is a Tensor containing a
         # single value; the `.item()` function just returns the Python value 
         # from the tensor.
-        total_loss += loss.item() 
+        total_loss += loss.item()
+
+        # compute accuracy
+        # Move logits and labels to CPU
+#         logits = loss.detach().cpu().numpy()
+#         label_ids = b_labels.to('cpu').numpy()
+        
+        
+        # Calculate the accuracy for this batch of test sentences.
+#         tmp_train_accuracy = flat_accuracy(logits, label_ids)
+        
+        # Accumulate the total accuracy.
+#         total_accuracy += tmp_train_accuracy        
+        
         
         # Perform a backward pass to calculate the gradients.
         loss.backward()
@@ -322,16 +400,16 @@ for epoch_i in range(0, epochs):
 
     # Calculate the average loss over the training data.
     avg_train_loss = total_loss / len(train_dataloader)   
-    avg_train_accuracy = total_accuracy/ len(train_dataloader)
+#     avg_train_accuracy = total_accuracy/ len(train_dataloader)
     
     # Store the loss value for plotting the learning curve.
     loss_values.append(avg_train_loss)
-    accuracy_values.append(avg_train_accuracy)
+#     accuracy_values.append(avg_train_accuracy)
 
     print("")
     print("  Average training loss: {0:.2f}".format(avg_train_loss))
-    print("  Average training accuracy: {0:.2f}".format(avg_train_accuracy))    
-    print("  Training epoch took: {:}".format(format_time(time.time() - t0)))
+#     print("  Average training accuracy: {0:.2f}".format(avg_train_accuracy))    
+    print("  Training epcoh took: {:}".format(format_time(time.time() - t0)))
         
     # ========================================
     #               Validation
@@ -400,20 +478,27 @@ for epoch_i in range(0, epochs):
     # Report the final accuracy for this validation run.
     print("  Accuracy: {0:.2f}".format(eval_accuracy/nb_eval_steps))
     print("  Validation took: {:}".format(format_time(time.time() - t0)))
-    print(pred_flat)
-    print(labels_flat)
+
+    class_report = classification_report(labels_flat, pred_flat, output_dict=True)
+
     
     #save model
-    output_dir = data_folder +"model_save/" + str(epoch_i)+"/"
+    output_dir = data_folder +model_save + str(epoch_i)+"/"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)    
-    log_path=data_folder +"model_save/"+"log_model.csv"  
+    log_path=data_folder +model_save+"log_model.csv"  
     val_acc = 1.0*eval_accuracy/nb_eval_steps
+    ifscore = class_report["macro avg"]["f1-score"]
     if epoch_i%save_step==0:
         save_model(output_dir)
-        list_data.append({'epoch':epoch_i,'train_loss':avg_train_loss, 'val_acc': val_acc})
+        list_data.append({'epoch':epoch_i,'train_loss':round(avg_train_loss,4), 'val_acc': round(val_acc,4), 'ifscore': round(ifscore,4)})
+        print(list_data[-1])
+        print(class_report)
+        fname = "val_result_"+str(epoch_i)+".json"
+        write_dict(class_report, data_folder_dev+fname)   
         
-write_csv_file_header(log_path, list_data, fieldnames)    
+write_csv_file_header(log_path, list_data, fieldnames) 
 print("Training complete!")
+
 
 

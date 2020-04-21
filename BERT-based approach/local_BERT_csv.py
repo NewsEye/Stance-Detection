@@ -11,17 +11,29 @@ import spacy
 from stop_words import get_stop_words
 import xml.dom.minidom    
 import sklearn.metrics as metrics
-import unicodedata
-import csv 
-#************* Global variables
-max_seq_len = 512  
+import unicodedata, collections
+import csv
+import pandas as pd
+import argparse
+import sys
 
+#================Global variables================
 # --server
-data_folder = "/hainguyen/STANCE_DETECTION/"
-# dataset = "NLF_data_dev"
-# lang = 'fi'  # 'de';#'fr'
-dataset = "German_data_test"#"NLF_data_test"
-lang = 'de'#'fi'  # 'de';#'fr'
+
+parser = argparse.ArgumentParser()
+parser.add_argument("curr_lang", help="Choose curr_lang", type=str) #German, French, NLF, Swedish
+parser.add_argument("lang", help="Choose lang", type=str) #de, fr, fi, sw
+parser.add_argument("part", help="Choose data part", type=str)#train, test, dev
+
+args = parser.parse_args()
+max_seq_len =  256#args.max_seq_len
+curr_lang = args.curr_lang; #German
+lang  = args.lang; #de
+data_part = args.part
+data_folder = "//"
+dataset = curr_lang+"_data_"+data_part#"German_data_train"
+
+
 pre_input_folder = data_folder+dataset+"/"
 input_folder = data_folder+dataset+"_input/"
 output_folder = data_folder+dataset+"_output/" 
@@ -32,6 +44,7 @@ if not os.path.exists(input_folder):
 if not os.path.exists(output_folder):
     os.mkdir(output_folder)    
 
+
 results_folder = data_folder + dataset + "_results/"
 if not os.path.exists(results_folder):
     os.mkdir(results_folder)
@@ -39,17 +52,22 @@ if not os.path.exists(results_folder):
 
 translator = Translator()
 
+# pol_threshold = 0.05
 num_context_word = 15#13#11#9#7#5#3
 senti_folder = "../senti_lexicon/"
 senti_trans_folder = "../senti_lexicon_trans/"
 senti_file_path = "senti_dict.json" # polarity score
 # senti_file_path = "senti_dict_no_trans.json" # positive (1.0) or negative (1.0) 
 
-stop_words = set(get_stop_words(lang))
+if lang=='sw':
+    stop_words = set(get_stop_words('swedish'))
+else:
+    stop_words = set(get_stop_words(lang))
 xml_bilexicon_path = "../XML_translation/"
 puncts = "—"
+#================Global variables================
 
-#************* List of functions
+#================List of functions================
 def open_csv_file(file_name, list_headers):
     csv_data = open(file_name, mode='w')
     csv_writer = csv.writer(csv_data, delimiter=',', quotechar='"')
@@ -91,14 +109,14 @@ def convert_file_dicts(file_name):
             tokenNE = line[lastTokenPos:tokenEndPos]
             list_line_tokens.append(tokenNE)
             
-#             print(tokenNE)
+            print(file_name, tokenNE)
             token = tokenNE.split("__")[0]
             tag_NE = tokenNE.split("__")[1]
             
             if len(tag_NE) > 0:
     
                 if tag_NE[0] == 'B':
-                    pol = tokenNE.split("__")[3]
+                    pol = tokenNE.split("__")[-1]
                     if tmp_NE != "":
                         tmp_NE_upper = tmp_NE.strip()#.upper()
                         dict_NEs[file_name].append((str(tmp_NE_index) + ":" + str(tmp_NE_offset) +":"+pol, tmp_NE_upper))
@@ -150,7 +168,23 @@ def get_sentiment(word, senti_dict, src_lang='fr'):
     
 #     print(word, pos_score, neg_score)
     return pos_score, neg_score
-
+    
+    
+    
+#     word = 'crazy'
+#     list_senti = list(swn.senti_synsets(word))
+#     sum_pos = 0; sum_neg = 0
+#     
+#     for senti in list_senti:
+#         sum_pos += senti.pos_score(); sum_neg += senti.neg_score()
+#         
+# 
+#     avg_pos = sum_pos * 1.0 / len(list_senti) if len(list_senti) > 0 else 0
+#     avg_neg = sum_neg * 1.0 / len(list_senti) if len(list_senti) > 0 else 0
+#     
+#     print(''.join([word,' (', str(round(avg_pos,3)),', ', str(round(avg_neg,3)),')']))  
+#           
+#     return avg_pos, avg_neg
 
 def get_senti_sent(list_sent, lang):
     '''
@@ -220,13 +254,40 @@ def create_NEs_csv(file_name, dict_NEs, dict_toks, dict_NEs_senti,csv_file_name,
         ne_pol = ne_item[0].split(":")[2]
         print(file_name, ne_item)
         ne_pol = int(ne_pol.replace('+', '0').replace('-', '1').replace('null', '2').replace('^n', '2')\
-                                      .replace('n', '2').replace('g', '2').replace('p', '0'))
+                                      .replace('neutral', '2').replace('n', '2').replace('m', '2').replace('g', '2').replace('p', '0'))
         ne_val = ne_item[1]
-        content = dict_toks[file_name][ne_pos+ne_offset:ne_pos+ne_offset+max_seq_len]
+        content = dict_toks[file_name][ne_pos+ne_offset-int(max_seq_len/2):ne_pos+ne_offset+int(max_seq_len/2)]
         content = ' '.join([word for (_, word) in content])
         if len(content.strip())==0: content = ne_val
         csv_writer.writerow([content, ne_val, ne_pol])
         
+#         if ne_pos == 11960: 
+#             print()
+#         count_tok = 0; list_context_word = []
+        
+#         if dict_toks[file_name][: ne_pos] != None and len(dict_toks[file_name][: ne_pos]) > 0:
+#             for tok in dict_toks[file_name][: ne_pos][::-1]:
+#                 tok_clean = tok[1].lower().strip(string.punctuation).strip(puncts)
+#                 if len(tok_clean) > 0 and tok_clean not in stop_words:
+#                     list_context_word.append(tok); count_tok += 1
+#                     if count_tok >= num_context_word: 
+#                         break
+#         count_tok = 0
+#         if dict_toks[file_name][ne_pos + ne_offset:] != None:
+#             for tok in dict_toks[file_name][ne_pos + ne_offset:]:
+#                 tok_clean = tok[1].lower().strip(string.punctuation).strip(puncts)
+#                 if len(tok_clean) > 0 and tok_clean  not in stop_words:
+#                     list_context_word.append(tok); count_tok += 1
+#                     if count_tok >= num_context_word: 
+#                         break
+        
+#         list_context_word = dict_toks[file_name][ne_pos - num_context_word: ne_pos]\
+#         + dict_toks[file_name][ne_pos + ne_offset: ne_pos + ne_offset + num_context_word]        
+        
+#         if list_context_word != None and len(list_context_word) > 0:            
+# #             print(ne_val, ne_pos, ne_offset)
+#             ne_senti = get_senti_sent([list_context_word], lang)
+#             dict_NEs_senti[file_name].append((ne_item[0], ne_senti))
     return dict_NEs_senti
 
 def create_file_csv(file_name, csv_writer, lang):
@@ -284,8 +345,6 @@ def create_senti_dict(senti_dict, lang='fr'):
     
     write_dict(senti_dict, senti_file_path) 
 
-
-
 def create_senti_dict_translation(senti_dict):
     '''
     GLOBAL: xml_bilexicon_path, senti_file_path
@@ -337,7 +396,6 @@ def create_senti_dict_translation(senti_dict):
                             
     write_dict(senti_dict, senti_file_path) 
     
-
 def create_senti_dict_googletrans(senti_dict):
     '''
     GLOBAL: xml_bilexicon_path, senti_file_path, senti_trans_folder
@@ -399,6 +457,7 @@ def get_sentiment_wordnet(word):
               
 
 # import sklearn.metrics 
+
 def create_input():
     '''
     Redaktion,     O -> Redaktion,__O
@@ -406,16 +465,19 @@ def create_input():
     global variables: pre_input_folder, input_folder
     '''
     for file_name in os.listdir(pre_input_folder):
+        if '.ipynb_checkpoints' in file_name or '.txt' not in file_name: continue
+        
         print(file_name)
-        if '.ipynb_checkpoints' in file_name: continue
+#         if '.ipynb_checkpoints' in file_name: continue
         file_path = pre_input_folder + file_name
         input_file_path = input_folder + file_name
         texts = codecs.open(file_path, 'r', encoding='utf-8').read().split('\n')
          
         output_texts = codecs.open(input_file_path, 'wb', encoding='utf-8')
 
-        for line in texts:
+        for line in texts[1:]:
             if line.strip() == '': continue
+            line=line.rstrip('SpaceAfter').strip()
             line = re.sub("\s+", "__", line)
             output_texts.write(line + "\n")
             
@@ -452,8 +514,8 @@ def eval_stance_result():
             if len(toks[1]) > 0 and toks[1][:2] in ('B-'):  # ,'I-'):#,'O-'):
 #                 print(count_line, toks[1])
                 
-                if toks[3] in ('+', 'n', '-', 'null', '^n', 'g', 'p'):
-                    y_true.append(int(toks[3].replace('+', '0').replace('-', '1').replace('null', '2').replace('^n', '2')\
+                if toks[-1] in ('+', 'n', '-', 'null', '^n', 'g', 'p'):
+                    y_true.append(int(toks[-1].replace('+', '0').replace('-', '1').replace('null', '2').replace('^n', '2')\
                                       .replace('n', '2').replace('g', '2').replace('p', '0')))
 #                 elif toks[3] in ('null'):
 #                     y_true.append(int(toks[3].replace('null','2')))
@@ -499,7 +561,6 @@ def eval_stance_result():
     print(results_folder)
     write_dict(eval_result_dict, results_folder + "eval_result_dict_"+str(num_context_word)+".json")
     
-
 def eval_stance_result_check():
     '''
     evaluate results of stance detection
@@ -523,6 +584,7 @@ def eval_stance_result_check():
         count_line = 1
         for line in texts:
             if line.strip() == '': count_line += 1; continue
+            line = line.strip('__')
             toks = line.split('__')
             print(toks)
 #             if toks[1][:2] in ('I-'):#,'O-'):
@@ -531,8 +593,8 @@ def eval_stance_result_check():
             if len(toks[1]) > 0 and toks[1][:2] in ('B-'):  # ,'I-'):#,'O-'):
                 print(count_line, toks[1])
                 
-                if toks[3] in ('+', 'n', '-', 'null', '^n', 'g', 'p'):
-                    y_true.append(int(toks[3].replace('+', '0').replace('-', '1').replace('null', '2').replace('^n', '2')\
+                if toks[-1] in ('+', 'n', '-', 'null', '^n', 'g', 'p'):
+                    y_true.append(int(toks[-1].replace('+', '0').replace('-', '1').replace('null', '2').replace('^n', '2')\
                                       .replace('n', '2').replace('g', '2').replace('p', '0')))
 #                 elif toks[3] in ('null'):
 #                     y_true.append(int(toks[3].replace('null','2')))
@@ -572,6 +634,7 @@ def unicode_to_ascii(s):
 # text = json.dumps(text)
 # print(text) 
 # exit()    
+
 def convert2json():
     dict_file_path = "../json_data/polarity_data.js"
     text = codecs.open(dict_file_path, 'rb', encoding='utf-8').read()
@@ -698,6 +761,7 @@ def create_csv_BERT():
                         
                     
                     polar_writer.writerow([content[ne_beg:], ne_name, polarity])    
+
 def split_data_part(file_name, start_train, start_dev, start_test):
     #***
     #global var: data_folder, pre_input_folder
@@ -714,9 +778,7 @@ def split_data_part(file_name, start_train, start_dev, start_test):
         data_path+=file_name.replace('.txt', list_parts[i]+'.txt')            
         data_text = '\n'.join(lines[list_positions[i]:list_positions[i+1]])
         open(data_path, 'w', encoding='utf-8').write(data_text)
-        
-
-            
+                    
 def get_f1(results_folder): 
     csv_writer = open_csv_file(results_folder + 'f1_avg.csv', ['num_context', 'f1_avg'])
     for num_context_word in range(3, 17, 2):
@@ -724,15 +786,37 @@ def get_f1(results_folder):
         dict_results = read_dict(file_path)
         f1_avg = round(dict_results["macro avg"]["f1-score"]*100,2)
         csv_writer.writerow([num_context_word, f1_avg])
-           
-if __name__ == '__main__':
-    # create csv file for BERT model 
 
-    csv_writer = open_csv_file(input_folder+dataset+".csv", ['Content', 'NamedEntity', 'Polarity'])
-                
+def create_data(data_file_path):
+    df = pd.read_csv(data_file_path, delimiter=',', lineterminator='\n', encoding="utf-8", header=0, names=['Content', 'NamedEntity', 'Polarity'])
+
+    # Report the number of sentences.
+    print('Number of training sentences: {:,}\n'.format(df.shape[0]))
+
+    Tweets = df.Content.values#[:10]
+    Targets = df.NamedEntity.values#[:10]
+    labels = df.Polarity.values#[:10]
+    
+    print(collections.Counter(labels))
+    
+#================List of functions================           
+
+if __name__ == '__main__':
+
+    #================ prepare data ================
+#     file_name = "nlf_data_orig.txt";start_train=0; start_dev=21981;start_test=27642
+#     split_data_part(file_name, start_train, start_dev, start_test); exit()
+
+        
+    #================ create input only for sample NewEyes dataset ================
+    create_input()
+    csv_writer = open_csv_file(input_folder+dataset+".csv", ['Content', 'NamedEntity', 'Polarity'])                
     for file_name in os.listdir(input_folder):
         if '.ipynb_checkpoints' in file_name or '.txt' not in file_name: 
             continue
         create_file_csv(file_name,csv_writer, lang)
+    create_data(input_folder+dataset+".csv")
 
 
+    
+            
