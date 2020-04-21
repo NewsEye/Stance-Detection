@@ -13,27 +13,35 @@ import xml.dom.minidom
 import sklearn.metrics as metrics
 import unicodedata
 import csv 
-#************* Global variables
-# --server
-data_folder = "/data/tnguye01/STANCE_DETECTION/"
-# dataset = "NLF_data_dev"
-# lang = 'fi'  # 'de';#'fr'
-dataset = "German_data_dev"#"NLF_data_test"
-lang = 'de'#'fi'  # 'de';#'fr'
-# senti_file_path = "senti_dict.json" # polarity score
-senti_file_path = "senti_dict_no_trans.json" # positive (1.0) or negative (1.0) 
+import argparse
+import sys
+#================== Global variables ================== 
 
+parser = argparse.ArgumentParser()
+parser.add_argument("curr_lang", help="Choose curr_lang", type=str) #German, French, NLF, Swedish
+parser.add_argument("part", help="Choose data part", type=str)#train, test, dev
+
+args = parser.parse_args()
+curr_lang = args.curr_lang; #German
+data_part = args.part
+    
+if curr_lang=='German': lang='de'
+    elif curr_lang=='NLF': lang = 'fi'
+        elif curr_lang=='French': lang='fr'
+            else: lang='sw'
+# # --server
+
+data_folder = "/data/tnguye01/STANCE_DETECTION/"
+
+dataset = curr_lang+"_data_"+data_part
+senti_file_path = "senti_dict_no_trans.json" # positive (1.0) or negative (1.0) 
 pre_input_folder = data_folder+dataset+"/"
 input_folder = data_folder+dataset+"_input/"
 output_folder = data_folder+dataset+"_output/" 
-
 if not os.path.exists(input_folder):
     os.mkdir(input_folder)
-    
 if not os.path.exists(output_folder):
     os.mkdir(output_folder)    
-
-
 
 results_folder = data_folder + dataset + "/results/"
 if not os.path.exists(results_folder):
@@ -42,18 +50,19 @@ if not os.path.exists(results_folder):
 
 translator = Translator()
 
-# pol_threshold = 0.05
-num_context_word = 15#13#11#9#7#5#3
 senti_folder = "../senti_lexicon/"
 senti_trans_folder = "../senti_lexicon_trans/"
 
 
-# nlp = spacy.load(lang+'_core_news_md')
-stop_words = set(get_stop_words(lang))
+if lang=='sw': stop_words = set(get_stop_words('swedish'))
+else:
+    stop_words = set(get_stop_words(lang))
 xml_bilexicon_path = "../XML_translation/"
 puncts = "—"
 
-#************* List of functions
+#================== Global variables ================== 
+
+#================== List of functions ================== 
 def convert_file_dicts(file_name):
     dict_toks = {}
     dict_NEs = {}
@@ -141,10 +150,12 @@ def translate_sentence(translator, src_txt, src_lang='fr', tgt_lang='en'):
 def get_sentiment(word, senti_dict, src_lang='fr'):
     pos_score, neg_score = 0, 0
     key_len = str(len(word))
-    if src_lang in senti_dict and key_len in senti_dict[src_lang] and word in senti_dict[src_lang][key_len]:
+    if src_lang in senti_dict and key_len in senti_dict[src_lang]:
+        if word in senti_dict[src_lang][key_len]:
             pos_score, neg_score = senti_dict[src_lang][key_len][word]
-    
-#     print(word, pos_score, neg_score)
+        elif word.lower() in senti_dict[src_lang][key_len]:
+            pos_score, neg_score = senti_dict[src_lang][key_len][word.lower()]
+    print(word, pos_score, neg_score)
     return pos_score, neg_score
     
     
@@ -164,13 +175,15 @@ def get_sentiment(word, senti_dict, src_lang='fr'):
 #           
 #     return avg_pos, avg_neg
 
-def get_senti_sent(list_sent, lang):
+def get_senti_sent(list_sent,pol_threshold, lang):
     '''
     1: POS
     0: NEU
     -1: NEG
     '''
-    src_txt = ' '.join([tok[1].lower().strip(string.punctuation).strip(puncts) for sent in list_sent for tok in sent])
+#     src_txt = ' '.join([tok[1].lower().strip(string.punctuation).strip(puncts) for sent in list_sent for tok in sent])
+    src_txt = ' '.join([tok[1].strip(string.punctuation).strip(puncts) for sent in list_sent for tok in sent])
+
 #     print('len_src_txt ', len([tok[1] for sent in list_sent for tok in sent]))
     
 #     sent_trans = translate_sentence(translator, src_txt)
@@ -195,19 +208,22 @@ def get_senti_sent(list_sent, lang):
     assert len(list_sentiments) > 0, '%d' % (len(list_sentiments))
     number_bearing_words = len([i for i, j in list_sentiments if (i > 0 or j > 0)])
     if number_bearing_words > 0: 
-        avg_pos = round(1.0 * sum([i for i, _ in list_sentiments]) / number_bearing_words, 1)
-        avg_neg = round(1.0 * sum([j for _, j in list_sentiments]) / number_bearing_words, 1)
+        avg_pos = round(1.0 * sum([i for i, _ in list_sentiments]) / number_bearing_words, 2)
+        avg_neg = round(1.0 * sum([j for _, j in list_sentiments]) / number_bearing_words, 2)
     else:
         avg_pos = avg_neg = 0.0
     print(avg_pos, avg_neg, abs(avg_pos - avg_neg))
     
+#     if avg_pos > avg_neg: return 1
+#     if avg_pos < avg_neg: return -1
+#     else: return 0#NEU
+
+    if abs(avg_pos - avg_neg) <= pol_threshold: return 0
+    
     if avg_pos > avg_neg: return 1
     if avg_pos < avg_neg: return -1
-    else: return 0
+    
 
-#     if abs(avg_pos - avg_neg)>pol_threshold: return 1
-#     if abs(avg_pos - avg_neg)<pol_threshold: return -1
-#     return 0
             
 #     if avg_pos > 0.25 and avg_neg > 0.25: 
 #         if avg_pos > avg_neg: return 1
@@ -218,7 +234,7 @@ def get_senti_sent(list_sent, lang):
 #     else: return 0
 #     return max(avg_pos, avg_neg, 1-(avg_pos+avg_neg))
 
-def create_NEs_senti(file_name, dict_NEs, dict_toks, dict_NEs_senti,num_context_word, lang): 
+def create_NEs_senti(file_name, dict_NEs, dict_toks, dict_NEs_senti,num_context_word,pol_threshold, lang): 
     
     if file_name not in dict_NEs_senti:
         dict_NEs_senti[file_name] = []
@@ -252,15 +268,15 @@ def create_NEs_senti(file_name, dict_NEs, dict_toks, dict_NEs_senti,num_context_
         
         if list_context_word != None and len(list_context_word) > 0:            
 #             print(ne_val, ne_pos, ne_offset)
-            ne_senti = get_senti_sent([list_context_word], lang)
+            ne_senti = get_senti_sent([list_context_word],pol_threshold, lang)
             dict_NEs_senti[file_name].append((ne_item[0], ne_senti))
     return dict_NEs_senti
 
-def create_file_senti(file_name, num_context_word, lang):
+def create_file_senti(file_name, num_context_word,pol_threshold, lang):
     dict_toks, dict_NEs, dict_global_local_index, dict_lines_words = convert_file_dicts(file_name)
     
     dict_NEs_senti = {}
-    dict_NEs_senti = create_NEs_senti(file_name, dict_NEs, dict_toks, dict_NEs_senti, num_context_word, lang)
+    dict_NEs_senti = create_NEs_senti(file_name, dict_NEs, dict_toks, dict_NEs_senti, num_context_word,pol_threshold, lang)
     
     for ne_senti in dict_NEs_senti[file_name]:
         
@@ -270,7 +286,7 @@ def create_file_senti(file_name, num_context_word, lang):
         for count_offset in range(0, ioffset):
             (iline, iword) = dict_global_local_index[file_name][itok + count_offset]
             
-            dict_lines_words[file_name][iline][iword] += "__" + str(ne_senti[1])
+#             dict_lines_words[file_name][iline][iword] += "__" + str(ne_senti[1])
             
             if ne_senti[1] == 0: 
                 dict_lines_words[file_name][iline][iword] += '__NEU'
@@ -473,7 +489,7 @@ def create_input():
             
         output_texts.close()                 
 
-def eval_stance_result():
+def eval_stance_result_all(num_context_word, pol_threshold):
     '''
     evaluate results of stance detection
     global variable: output_folder, data_folder
@@ -504,12 +520,13 @@ def eval_stance_result():
             if len(toks[1]) > 0 and toks[1][:2] in ('B-'):  # ,'I-'):#,'O-'):
 #                 print(count_line, toks[1])
                 
-                if toks[3] in ('+', 'n', '-', 'null', '^n', 'g', 'p'):
-                    y_true.append(int(toks[3].replace('+', '0').replace('-', '1').replace('null', '2').replace('^n', '2')\
-                                      .replace('n', '2').replace('g', '2').replace('p', '0')))
-#                 elif toks[3] in ('null'):
-#                     y_true.append(int(toks[3].replace('null','2')))
-#                     set_null.add(str(count_file)+":"+str(count_line))
+                if toks[-2] in ('+', 'n', '-', 'null', '^n','neutral', 'g', 'p', 'm'):
+                    print(toks)
+                    y_true.append(int(toks[-2].replace('+', '0').replace('-', '1').replace('null', '2').replace('^n', '2')\
+                                      .replace('neutral', '2').replace('n', '2').replace('m', '2').replace('g', '2').replace('p', '0')))
+
+# replace('+', '0').replace('-', '1').replace('null', '2').replace('^n', '2')\
+#                                       .replace('neutral', '2').replace('n', '2').replace('m', '2').replace('g', '2').replace('p', '0')
                     
                     if toks[-1] in ('POS', 'NEG', 'NEU'):
                         y_pred.append(int(toks[-1].replace('POS', '0').replace('NEG', '1').replace('NEU', '2')))
@@ -549,7 +566,8 @@ def eval_stance_result():
     eval_result_dict['only_null_itag'] = count_null_itag
     
     print(results_folder)
-    write_dict(eval_result_dict, results_folder + "eval_result_dict_"+str(num_context_word)+".json")
+#     write_dict(eval_result_dict, results_folder + "eval_result_dict_"+str(num_context_word)+".json")
+    write_dict(eval_result_dict, results_folder + "eval_result_dict_"+str(num_context_word)+"_"+str(pol_threshold)+".json")
     
 
 def eval_stance_result_check():
@@ -775,28 +793,94 @@ def open_csv_file(file_name, list_headers):
             
 def get_f1(results_folder): 
     csv_writer = open_csv_file(results_folder + 'f1_avg.csv', ['num_context', 'f1_avg'])
-    for num_context_word in range(3, 30, 2):
+#     for num_context_word in range(3, 30, 2):
+    for num_context_word in range(3, 4):        
         file_path = results_folder + "eval_result_dict_"+str(num_context_word)+".json"
         dict_results = read_dict(file_path)
         f1_avg = round(dict_results["macro avg"]["f1-score"]*100,2)
         csv_writer.writerow([num_context_word, f1_avg])
-           
+
+def get_f1_pol_threshold(results_folder): 
+    csv_writer = open_csv_file(results_folder + 'f1_avg.csv', ['num_context', 'f1_avg'])
+#     for num_context_word in range(3, 30, 2):
+    for step in range(2, 30, 1):    
+        pol_threshold = step *0.01       
+        file_path = results_folder + "eval_result_dict_"+str(pol_threshold)+".json"
+        dict_results = read_dict(file_path)
+        f1_avg = round(dict_results["macro avg"]["f1-score"]*100,2)
+        csv_writer.writerow([pol_threshold, f1_avg])  
+                 
+def get_f1_all(results_folder, max_context_words=30,  max_polar_score_step=30): 
+    csv_writer = open_csv_file(results_folder + 'f1_avg.csv', ['num_context','polar_score', 'f1_avg'])
+    for num_context_word in range(1, max_context_words, 1):
+        for step in range(1, max_polar_score_step, 1):    
+            pol_threshold = step *0.01       
+            file_path = results_folder + "eval_result_dict_"+str(num_context_word)+"_"+str(pol_threshold)+".json"
+            dict_results = read_dict(file_path)
+            f1_avg = round(dict_results["macro avg"]["f1-score"]*100,2)
+            csv_writer.writerow([num_context_word, pol_threshold, f1_avg])           
+
+#================== List of functions ================== 
+
 if __name__ == '__main__':
-    #--- prepare data ---
+    #=============== create_senti_dict for 5 languages ===============    
+#     print('test create_senti_dict')
+#     senti_dict = {}
+#     for lang in ['de', 'fi', 'fr','en', 'sw']:
+#         create_senti_dict(senti_dict, lang)
+# #     create_senti_dict_translation(senti_dict); exit()
+# #     create_senti_dict_googletrans(senti_dict); exit()
+#     print('test create_senti_dict'); exit()
+    #=============== create_senti_dict for 5 languages ===============  
+
+    #=============== convert, split dataset ===============    
+#     convert2json(); #\x -> \u00 only for pre-processing English PULS
+#     file_name = "nlf_data_orig.txt";start_train=0; start_dev=21981;start_test=27642
+#     split_data_part(file_name, start_train, start_dev, start_test); exit()
 #     create_input(); exit()  # only for sample NewEyes dataset
 
-    #**** stance analysis ***    
+    #=============== convert, split dataset ===============
+    
+    #=============== choose pol_threshold ===============     
     senti_dict = {}
-    if lang != 'en' and os.path.exists(senti_file_path): 
+    if lang != 'en' and os.path.exists(senti_file_path): #english -> EN (instead of en)
         senti_dict = read_dict(senti_file_path)
 
-            
-    for num_context_word in range(3, 30, 2):     
-        for file_name in os.listdir(input_folder):
-            if '.ipynb_checkpoints' in file_name or '.txt' not in file_name: 
-                continue
-            create_file_senti(file_name,num_context_word, lang)
+    max_context_words=30;  max_polar_score_step=20
+    for num_context_word in range(1, max_context_words, 1):
+        for step in range(1, max_polar_score_step, 1):    
+            pol_threshold = step *0.01
+            print(pol_threshold)
+            for file_name in os.listdir(input_folder):
+                if '.ipynb_checkpoints' in file_name or '.txt' not in file_name: 
+                    continue
+                create_file_senti(file_name,num_context_word,pol_threshold, lang)
+    
+            eval_stance_result_all(num_context_word, pol_threshold)
+    get_f1_all(results_folder, max_context_words,  max_polar_score_step)
+    exit()
+    
+    #=============== choose pol_threshold =============== 
+    
+    #=============== testing ===============
+#     senti_dict = {}
+#     if lang != 'en' and os.path.exists(senti_file_path): 
+#         senti_dict = read_dict(senti_file_path)  
 
-        eval_stance_result()
-    get_f1(results_folder)
-    #---- stance analysis ---
+#     for file_name in os.listdir(input_folder):
+#         if '.ipynb_checkpoints' in file_name or '.txt' not in file_name: 
+#             continue    
+#         create_file_senti(file_name,num_context_word,pol_threshold, lang)
+#     eval_stance_result_all(num_context_word, pol_threshold)
+#     exit()
+    #=============== testing ===============
+        
+    
+    
+    
+    
+
+
+
+    
+    
