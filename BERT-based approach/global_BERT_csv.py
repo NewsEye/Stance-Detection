@@ -16,8 +16,8 @@ import csv, pandas
 
 #************* Global variables
 #--server
-data_folder = "/hainguyen/STANCE_DETECTION/"
-dataset = "PULS_data_dev"
+data_folder = "/"
+dataset = "PULS_data_test"
 pre_input_folder = data_folder+dataset+"/"
 input_folder = data_folder+dataset+"_input/"
 output_folder = data_folder+dataset+"_output/" 
@@ -27,6 +27,14 @@ if not os.path.exists(input_folder):
     
 if not os.path.exists(output_folder):
     os.mkdir(output_folder)    
+
+
+#--local
+# data_folder = "../"
+# dataset=""
+# pre_input_folder = data_folder+"data_pre_input/"
+# input_folder = data_folder+"data_input/"
+# output_folder = data_folder+"data_output/" 
 
 
 results_folder=data_folder+dataset+"_results/"    
@@ -680,6 +688,7 @@ def convert_to_right_format(postprocess_data, dict_file_path, start_docid, end_d
     dict_tmp = read_dict(dict_file_path)
     dict_gt = {}
     test_data_flag = False
+    count_files = 0
     for item in dict_tmp:
         content = item['content']; 
         docnoid = item['docnoId'] 
@@ -695,7 +704,7 @@ def convert_to_right_format(postprocess_data, dict_file_path, start_docid, end_d
             
             for ne in item['entities']:
                 entityid = str(ne['entityId'])
-                if ne['polarity']=='contradiction': polarity='c'
+                if ne['polarity']=='contradiction': continue
                 elif ne['polarity']>0.5:
                     polarity = '+' 
                 elif ne['polarity']==0.5:
@@ -731,25 +740,26 @@ def convert_to_right_format(postprocess_data, dict_file_path, start_docid, end_d
                     char_index+= len(tok)+1
     #             print(' '.join(new_content))
             
-                file_name = docnoid+"_"+entityid+".txt"
+                file_name = docnoid+"_"+entityid + "_"+str(count_files)+".txt"; count_files+=1
                 open(postprocess_data+file_name, 'w').write(' '.join(new_content))
                 print(dict_gt)
     #             assert file_name not in dict_gt or file_name=='793907837DA57FD27CBF4E8A5FD3FB38_28469.txt', ("file name %s", file_name)
                 dict_gt[file_name]=polarity
     write_dict(dict_gt, results_folder+'dict_gt.json')
+    print(count_files)
 
 def create_csv_BERT_PULS():
 #     dict_file_path = "../json_data/polarity_data.json" 
     dict_file_path = data_folder+"PULS_data/polarity_data.json"     
-    start_docid = "0A21D5765ED3B8F51065D3CF7339371E"
-    end_docid =   "43B3E9B3BD827B0E9506D837408C8AB9"
-    dataset_name = "PULS_data_train"
+#     start_docid = "0A21D5765ED3B8F51065D3CF7339371E"
+#     end_docid =   "43B3E9B3BD827B0E9506D837408C8AB9"
+#     dataset_name = "PULS_data_train"
 #     start_docid = "43B3E9B3BD827B0E9506D837408C8AB9" 
 #     end_docid =   "7272C54D09FAFF86E978AD6072606DD6"
 #     dataset_name = "PULS_data_dev"
-#     start_docid = "7272C54D09FAFF86E978AD6072606DD6"
-#     end_docid =   "" 
-#     dataset_name = "PULS_data_test"   
+    start_docid = "7272C54D09FAFF86E978AD6072606DD6"
+    end_docid =   "" 
+    dataset_name = "PULS_data_test"   
 
     postprocess_data = data_folder+dataset_name+"_input/"
     if not os.path.exists(postprocess_data):
@@ -831,25 +841,7 @@ def create_csv_BERT_EMM():
         
        
 if __name__ == '__main__':
-#*** create train, dev, test part data for BERT ***   
-    create_csv_BERT_PULS()
-#     create_csv_BERT_EMM()        
-#     exit()
+    #================ create train, dev, test part data ================
+#     create_csv_BERT_PULS(); exit()
+#     create_csv_BERT_EMM(); exit()
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-
-
-
-    
-    
